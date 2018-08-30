@@ -21,6 +21,179 @@
 uint32_t score=0;
 uint8_t scheme=0;
 
+// https://stackoverflow.com/a/6782480
+
+static char encoding_table[] = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
+                                'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P',
+                                'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X',
+                                'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f',
+                                'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n',
+                                'o', 'p', 'q', 'r', 's', 't', 'u', 'v',
+                                'w', 'x', 'y', 'z', '0', '1', '2', '3',
+                                '4', '5', '6', '7', '8', '9', '+', '/'};
+static char *decoding_table = NULL;
+static int mod_table[] = {0, 2, 1};
+
+
+char *base64_encode(const unsigned char *data,
+                    size_t input_length,
+                    size_t *output_length) {
+
+    *output_length = 4 * ((input_length + 2) / 3);
+
+    char *encoded_data = malloc(*output_length);
+    if (encoded_data == NULL) return NULL;
+
+    for (int i = 0, j = 0; i < input_length;) {
+
+        uint32_t octet_a = i < input_length ? (unsigned char)data[i++] : 0;
+        uint32_t octet_b = i < input_length ? (unsigned char)data[i++] : 0;
+        uint32_t octet_c = i < input_length ? (unsigned char)data[i++] : 0;
+
+        uint32_t triple = (octet_a << 0x10) + (octet_b << 0x08) + octet_c;
+
+        encoded_data[j++] = encoding_table[(triple >> 3 * 6) & 0x3F];
+        encoded_data[j++] = encoding_table[(triple >> 2 * 6) & 0x3F];
+        encoded_data[j++] = encoding_table[(triple >> 1 * 6) & 0x3F];
+        encoded_data[j++] = encoding_table[(triple >> 0 * 6) & 0x3F];
+    }
+
+    for (int i = 0; i < mod_table[input_length % 3]; i++)
+        encoded_data[*output_length - 1 - i] = '=';
+
+    return encoded_data;
+}
+
+
+unsigned char *base64_decode(const char *data,
+                             size_t input_length,
+                             size_t *output_length) {
+
+    if (decoding_table == NULL) build_decoding_table();
+
+    if (input_length % 4 != 0) return NULL;
+
+    *output_length = input_length / 4 * 3;
+    if (data[input_length - 1] == '=') (*output_length)--;
+    if (data[input_length - 2] == '=') (*output_length)--;
+
+    unsigned char *decoded_data = malloc(*output_length);
+    if (decoded_data == NULL) return NULL;
+
+    for (int i = 0, j = 0; i < input_length;) {
+
+        uint32_t sextet_a = data[i] == '=' ? 0 & i++ : decoding_table[data[i++]];
+        uint32_t sextet_b = data[i] == '=' ? 0 & i++ : decoding_table[data[i++]];
+        uint32_t sextet_c = data[i] == '=' ? 0 & i++ : decoding_table[data[i++]];
+        uint32_t sextet_d = data[i] == '=' ? 0 & i++ : decoding_table[data[i++]];
+
+        uint32_t triple = (sextet_a << 3 * 6)
+        + (sextet_b << 2 * 6)
+        + (sextet_c << 1 * 6)
+        + (sextet_d << 0 * 6);
+
+        if (j < *output_length) decoded_data[j++] = (triple >> 2 * 8) & 0xFF;
+        if (j < *output_length) decoded_data[j++] = (triple >> 1 * 8) & 0xFF;
+        if (j < *output_length) decoded_data[j++] = (triple >> 0 * 8) & 0xFF;
+    }
+
+    return decoded_data;
+}
+
+
+void build_decoding_table() {
+
+    decoding_table = malloc(256);
+
+    for (int i = 0; i < 64; i++)
+        decoding_table[(unsigned char) encoding_table[i]] = i;
+}
+
+
+void base64_cleanup() {
+    free(decoding_table);
+}
+
+
+
+// given score and board, returns buffer with encoded state
+// stores size of buffer (as it will probably contain null bytes) in osize
+uint8_t *encodeBoard(size_t *osize, uint32_t score, uint8_t board[SIZE][SIZE]) {
+    size_t bitsNeeded = 0;
+    for (int x = 0; x < SIZE; x++) {
+        for (int y = 0; y < SIZE; y++) {
+            bitsNeeded += board[x][y];
+            bitsNeeded++;
+        }
+    }
+
+    size_t bytes = bitsNeeded / 8 + (bitsNeeded % 8 == 0 ? 4 : 5);
+    *osize = bytes;
+    uint8_t *buf = (uint8_t *) malloc(bytes);
+    // store score
+    buf[0] = (uint8_t)(score >> 24);
+    buf[1] = (uint8_t)((score >> 16) & 0xff);
+    buf[2] = (uint8_t)((score >> 8) & 0xff);
+    buf[3] = (uint8_t)(score & 0xff);
+
+    // clear the buffer (except the score)
+    for (int i = 4; i < bytes; i++) buf[i] = 0;
+
+    // encode board
+    int x = 0, y = 0, i = board[0][0], val;
+    for (int bit = 0; bit < bitsNeeded; bit++) {
+        if (i > 0) val = 1;
+        else val = 0;
+        i--;
+        if (i < 0) {
+            x++;
+            if (x >= SIZE) {
+                y++;
+                x = 0;
+            }
+            i = board[x][y];
+        }
+
+        buf[bit / 8 + 4] |= val << (7 - (bit % 8));
+    }
+
+    return buf;
+}
+
+// decode a board into the score and board pointers
+void decodeBoard(uint32_t *score, uint8_t board[SIZE][SIZE], uint8_t *buf) {
+    *score = (buf[0] << 24) | (buf[1] << 16) | (buf[2] << 8) | buf[3];
+
+    int x = 0, y = 0, i = 0, val;
+    for (int bit = 32; ; bit++) {
+        val = buf[bit / 8] & (1 << (7 - (bit % 8)));
+        if (val) i++;
+        else {
+            board[x][y] = i;
+            i = 0;
+            x++;
+            if (x >= SIZE) {
+                x = 0;
+                y++;
+                if (y >= SIZE) {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+void restoreBoard(char *saveString, uint8_t board[SIZE][SIZE]) {
+	size_t b64size = strlen(saveString), binsize;
+	unsigned char *binary;
+
+	binary = base64_decode(saveString, b64size, &binsize);
+
+	decodeBoard(&score, board, binary);
+
+	free(binary);
+}
+
 void getColor(uint8_t value, char *color, size_t length) {
 	uint8_t original[] = {8,255,1,255,2,255,3,255,4,255,5,255,6,255,7,255,9,0,10,0,11,0,12,0,13,0,14,0,255,0,255,0};
 	uint8_t blackwhite[] = {232,255,234,255,236,255,238,255,240,255,242,255,244,255,246,0,248,0,249,0,250,0,251,0,252,0,253,0,254,0,255,0};
@@ -38,12 +211,20 @@ void getColor(uint8_t value, char *color, size_t length) {
 }
 
 void drawBoard(uint8_t board[SIZE][SIZE]) {
-	uint8_t x,y;
+	uint8_t x, y, *binary, *base64;
+	size_t binsize, b64size;
 	char c;
 	char color[40], reset[] = "\033[m";
 	printf("\033[H");
 
-	printf("2048.c %17d pts\n\n",score);
+	printf("2048.c %17d pts\n",score);
+
+	// generate and display save string
+	binary = encodeBoard(&binsize, score, board);
+	base64 = base64_encode(binary, binsize, &b64size);
+	printf("\033[2Ksave: %s\n\n", base64);
+	free(binary);
+	free(base64);
 
 	for (y=0;y<SIZE;y++) {
 		for (x=0;x<SIZE;x++) {
@@ -76,7 +257,7 @@ void drawBoard(uint8_t board[SIZE][SIZE]) {
 		printf("\n");
 	}
 	printf("\n");
-	printf("        ←,↑,→,↓ or q        \n");
+	printf("      ←,↑,→,↓, e, or q      \n");
 	printf("\033[A"); // one line up
 }
 
@@ -361,6 +542,7 @@ int main(int argc, char *argv[]) {
 	uint8_t board[SIZE][SIZE];
 	char c;
 	bool success;
+	char saveString[80];
 
 	if (argc == 2 && strcmp(argv[1],"test")==0) {
 		return test();
@@ -430,10 +612,19 @@ int main(int argc, char *argv[]) {
 			}
 			drawBoard(board);
 		}
+		if (c=='e') {
+			printf("\033[?25h\033[2KENTER SAVE: ");
+			scanf("%s", saveString);
+			restoreBoard(saveString, board);
+			printf("\033[?25l");
+			drawBoard(board);
+		}
 	}
 	setBufferedInput(true);
 
 	printf("\033[?25h\033[m");
+
+	base64_cleanup();
 
 	return EXIT_SUCCESS;
 }
