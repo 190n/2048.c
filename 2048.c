@@ -614,7 +614,9 @@ int main(int argc, char *argv[]) {
 		}
 		if (c=='e') {
 			printf("\033[?25h\033[2KENTER SAVE: ");
+			setBufferedInput(true);
 			scanf("%s", saveString);
+			setBufferedInput(false);
 			restoreBoard(saveString, board);
 			printf("\033[?25l");
 			drawBoard(board);
